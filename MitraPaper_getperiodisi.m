@@ -1,0 +1,123 @@
+function [R] = MitraPaper_getperiodrates()
+
+MitraPaper_info;
+global info
+global datadir_manuscript
+bins = 0:0.001:1;
+for nIctalPeriods = 4
+    clear R
+    
+    nFiles = length(info);
+    celltype = {};
+    for iFile = 1:nFiles
+        info(iFile)
+        iFile
+        if info(iFile).has_rc==0
+
+            % read in the opto files 
+            fieldSelection = ones(1,5);    
+            extractHeader  = 1;
+            try
+                [TimeStamp,B,C,D,data,F] = Nlx2MatSpike(fullfile(info(iFile).directory, 'optopulses.ntt'), fieldSelection,extractHeader, 1);
+            catch
+                TimeStamp = [];
+            end
+            
+            % if there are no pulses, compute the rat in the regular way
+            if length(TimeStamp)<2
+               [rate_base(iFile),logratio_base(iFile)] = Mitra01_isi(fullfile(info(iFile).directory, info(iFile).name), bins, info(iFile).base_start, info(iFile).base_end);
+            else % if there are opto pulses, use a different script
+                [rate_base(iFile),logratio_base(iFile)] = MitraPaper_isi_opto_spontaneous(fullfile(info(iFile).directory, info(iFile).name), TimeStamp, bins,info(iFile).base_start, info(iFile).base_end);
+            end
+
+            % ictal periods
+            ts1 = info(iFile).injection_start;
+            ts2 = info(iFile).seizure_onset+info(iFile).ictalspike*10^6;    
+            ts  = linspace(ts1, ts2, nIctalPeriods+1);    
+            for iIctalPeriod = 1:nIctalPeriods
+
+                 if length(TimeStamp)<2
+                     [rate_ictal(iFile,iIctalPeriod),logratio_ictal(iFile,iIctalPeriod)] = ...
+                     Mitra01_isi(fullfile(info(iFile).directory, info(iFile).name), bins,ts(iIctalPeriod), ts(iIctalPeriod+1));
+                 else
+                    [rate_ictal(iFile,iIctalPeriod),logratio_ictal(iFile,iIctalPeriod)] = ...
+                     MitraPaper_isi_opto_spontaneous(fullfile(info(iFile).directory, info(iFile).name),  TimeStamp,bins,ts(iIctalPeriod), ts(iIctalPeriod+1));                
+                 end
+            end
+        else % write something new that produces the same stuff for RC
+            % read in the data and the timestamps
+            fieldSelection = ones(1,5);    
+            extractHeader  = 1;
+            [TimeStamp,B,C,D,data,F] = Nlx2MatSpike(fullfile(info(iFile).directory, 'optopulses.ntt'), fieldSelection,extractHeader, 1);
+            
+             if sum(diff(TimeStamp)>1.5*10^6)<10, continue,end      
+
+             % compute the baseline rate
+             [rate_base(iFile),logratio_base(iFile)] = MitraPaper_isi_opto(fullfile(info(iFile).directory, info(iFile).name), bins,TimeStamp, info(iFile).nlevels,info(iFile).base_start_pulse, info(iFile).base_end_pulse);
+
+             %ictal for RC files
+             ts1 = info(iFile).injection_start_pulse;
+             ts2 = info(iFile).seizure_onset_pulse;    
+             ts2  = TimeStamp(ts2) + info(iFile).ictalspike*10^6;                  
+             ts2 = nearest(TimeStamp,ts2);
+
+              iFile 
+             ts  = round(linspace(ts1, ts2, nIctalPeriods+1)); 
+             for iIctalPeriod = 1:nIctalPeriods
+                  [rate_ictal(iFile,iIctalPeriod),logratio_ictal(iFile,iIctalPeriod)] = ...
+                  MitraPaper_isi_opto(fullfile(info(iFile).directory, info(iFile).name), bins,TimeStamp, info(iFile).nlevels,ts(iIctalPeriod), ts(iIctalPeriod+1));
+             end
+        end        
+        celltype{iFile} = info(iFile).neuron_type;
+    end
+    
+    % concatenate all the data and give it back as a result structure
+     for k = 1:length(info)
+         if isempty(rate_base(k).avg)                   
+               rate_base(k).avg = NaN(1,length(bins)-1);
+            rate_base(k).lv = NaN;
+         end
+    end
+    
+    R.isi_base  = cat(1,rate_base(:).avg);
+    R.lv_base   = cat(1,rate_base(:).lv);
+    R.logratio_base = logratio_base;
+    
+    for k = 1:length(info)
+       for ii = 1:nIctalPeriods
+            if isempty(rate_ictal(k,ii).avg)                   
+                rate_ictal(k,ii).avg = NaN(1,length(bins)-1);
+                rate_ictal(k,ii).lv = NaN;
+            end
+       end
+    end
+
+    for ii = 1:nIctalPeriods
+        R.isi_ictal(:,:,ii) = cat(1,rate_ictal(:,ii).avg);
+        R.lv_ictal(:,ii)    = cat(1,rate_ictal(:,ii).lv);
+    end    
+    R.logratio_ictal = logratio_ictal;
+
+    R.neurontype   = celltype;
+    for k = 1:length(R.neurontype)
+        if isempty(R.neurontype{k}) | isnan(R.neurontype{k})
+            R.neurontype{k} = 'Z';
+        end
+    end
+    
+    [a,b,c] = unique(R.neurontype);
+    R.neurontype_label = a;
+    R.neurontype_indx  = c;
+        
+    outputdir = fullfile(datadir_manuscript, 'averageisi');
+    mkdir(outputdir)
+    str = ['averageisi_' num2str(nIctalPeriods)];
+    filename = fullfile(outputdir, str);
+    save(filename, 'R');
+end
+
+    
+    
+
+
+
